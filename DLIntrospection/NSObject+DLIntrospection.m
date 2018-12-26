@@ -41,15 +41,15 @@
     if (!strcmp(cString, @encode(Class))) return @"class";
     if (!strcmp(cString, @encode(SEL))) return @"SEL";
     
-//@TODO: do handle bitmasks
+    //@TODO: do handle bitmasks
     NSString *result = [NSString stringWithCString:cString encoding:NSUTF8StringEncoding];
     if ([[result substringToIndex:1] isEqualToString:@"@"] && [result rangeOfString:@"?"].location == NSNotFound) {
         result = [[result substringWithRange:NSMakeRange(2, result.length - 3)] stringByAppendingString:@"*"];
     } else
-    if ([[result substringToIndex:1] isEqualToString:@"^"]) {
-        result = [NSString stringWithFormat:@"%@ *",
-                   [NSString decodeType:[[result substringFromIndex:1] cStringUsingEncoding:NSUTF8StringEncoding]]];
-    }
+        if ([[result substringToIndex:1] isEqualToString:@"^"]) {
+            result = [NSString stringWithFormat:@"%@ *",
+                      [NSString decodeType:[[result substringFromIndex:1] cStringUsingEncoding:NSUTF8StringEncoding]]];
+        }
     return result;
 }
 
@@ -57,6 +57,11 @@
 
 static void getSuper(Class class, NSMutableString *result) {
     [result appendFormat:@" -> %@", NSStringFromClass(class)];
+    if ([class superclass]) { getSuper([class superclass], result); }
+}
+
+static void getSuperList(Class class, NSMutableString *result) {
+    [result appendFormat:@"%@", NSStringFromClass(class)];
     if ([class superclass]) { getSuper([class superclass], result); }
 }
 
@@ -109,14 +114,14 @@ static void getSuper(Class class, NSMutableString *result) {
 
 + (NSArray *)protocols {
     unsigned int outCount;
-    Protocol * const *protocols = class_copyProtocolList([self class], &outCount);
-
+    Protocol * __unsafe_unretained *protocols = class_copyProtocolList([self class], &outCount);
+    
     NSMutableArray *result = [NSMutableArray array];
     for (unsigned int i = 0; i < outCount; i++) {
         unsigned int adoptedCount;
-        Protocol * const *adotedProtocols = protocol_copyProtocolList(protocols[i], &adoptedCount);
+        Protocol * __unsafe_unretained *adotedProtocols = protocol_copyProtocolList(protocols[i], &adoptedCount);
         NSString *protocolName = [NSString stringWithCString:protocol_getName(protocols[i]) encoding:NSUTF8StringEncoding];
-
+        
         NSMutableArray *adoptedProtocolNames = [NSMutableArray array];
         for (unsigned int idx = 0; idx < adoptedCount; idx++) {
             [adoptedProtocolNames addObject:[NSString stringWithCString:protocol_getName(adotedProtocols[idx]) encoding:NSUTF8StringEncoding]];
@@ -127,9 +132,13 @@ static void getSuper(Class class, NSMutableString *result) {
             protocolDescription = [NSString stringWithFormat:@"%@ <%@>", protocolName, [adoptedProtocolNames componentsJoinedByString:@", "]];
         }
         [result addObject:protocolDescription];
-        //free(adotedProtocols);
+        if (adotedProtocols) {
+            free(adotedProtocols);
+        }
     }
-    //free((__bridge void *)(*protocols));
+    if (outCount > 0) {
+        free(protocols);
+    }
     return result.count ? [result copy] : nil;
 }
 
@@ -139,7 +148,7 @@ static void getSuper(Class class, NSMutableString *result) {
     NSArray *requiredMethods = [[[self class] formattedMethodsForProtocol:proto required:YES instance:NO] arrayByAddingObjectsFromArray:[[self class]formattedMethodsForProtocol:proto required:YES instance:YES]];
     
     NSArray *optionalMethods = [[[self class] formattedMethodsForProtocol:proto required:NO instance:NO] arrayByAddingObjectsFromArray:[[self class]formattedMethodsForProtocol:proto required:NO instance:YES]];
-
+    
     unsigned int propertiesCount;
     NSMutableArray *propertyDescriptions = [NSMutableArray array];
     objc_property_t *properties = protocol_copyPropertyList(proto, &propertiesCount);
@@ -162,7 +171,7 @@ static void getSuper(Class class, NSMutableString *result) {
 
 + (NSString *)parentClassHierarchy {
     NSMutableString *result = [NSMutableString string];
-    getSuper([self class], result);
+    getSuperList([self class], result);
     return result;
 }
 
@@ -173,17 +182,22 @@ static void getSuper(Class class, NSMutableString *result) {
     Method *methods = class_copyMethodList(class, &outCount);
     NSMutableArray *result = [NSMutableArray array];
     for (unsigned int i = 0; i < outCount; i++) {
+        char *returnStr = method_copyReturnType(methods[i]);
         NSString *methodDescription = [NSString stringWithFormat:@"%@ (%@)%@",
                                        type,
-                                       [NSString decodeType:method_copyReturnType(methods[i])],
+                                       [NSString decodeType:returnStr],
                                        NSStringFromSelector(method_getName(methods[i]))];
+        free(returnStr);
         
         NSInteger args = method_getNumberOfArguments(methods[i]);
         NSMutableArray *selParts = [[methodDescription componentsSeparatedByString:@":"] mutableCopy];
         NSInteger offset = 2; //1-st arg is object (@), 2-nd is SEL (:)
         
         for (NSUInteger idx = offset; idx < args; idx++) {
-            NSString *returnType = [NSString decodeType:method_copyArgumentType(methods[i], (unsigned int)idx)];
+            returnStr = method_copyArgumentType(methods[i], (unsigned int)idx);
+            NSString *returnType = [NSString decodeType:returnStr];
+            free(returnStr);
+            
             selParts[idx - offset] = [NSString stringWithFormat:@"%@:(%@)arg%lu",
                                       selParts[idx - offset],
                                       returnType,
