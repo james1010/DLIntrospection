@@ -70,6 +70,7 @@ static void getSuper(Class class, NSMutableString *result) {
     for (unsigned int i = 0 ; i < classesCount; i++) {
         [result addObject:NSStringFromClass(classes[i])];
     }
+    free(classes);
     return [result sortedArrayUsingSelector:@selector(compare:)];
 }
 
